@@ -2,10 +2,6 @@ ifndef UNAME_S
 UNAME_S := $(shell uname -s)
 endif
 
-ifndef UNAME_P
-UNAME_P := $(shell uname -p)
-endif
-
 ifndef UNAME_M
 UNAME_M := $(shell uname -m)
 endif
@@ -13,29 +9,15 @@ endif
 CCV := $(shell $(CC) --version | head -n 1)
 CXXV := $(shell $(CXX) --version | head -n 1)
 
-# Mac OS + Arm can report x86_64
-# ref: https://github.com/ggerganov/whisper.cpp/issues/66#issuecomment-1282546789
-ifeq ($(UNAME_S),Darwin)
-	ifneq ($(UNAME_P),arm)
-		SYSCTL_M := $(shell sysctl -n hw.optional.arm64)
-		ifeq ($(SYSCTL_M),1)
-			# UNAME_P := arm
-			# UNAME_M := arm64
-			warn := $(warning Your arch is announced as x86_64, but it seems to actually be ARM64. Not fixing that can lead to bad performance. For more info see: https://github.com/ggerganov/whisper.cpp/issues/66\#issuecomment-1282546789)
-		endif
-	endif
-endif
-
 #
 # Compile flags
 #
 
-CFLAGS   = -I.              -O3 -DNDEBUG -std=c11   -fPIC
-CXXFLAGS = -I. -I./examples -O3 -DNDEBUG -std=c++11 -fPIC
+CFLAGS   = -I. -O3 -DNDEBUG -std=c11   -fPIC
+CXXFLAGS = -I. -O3 -DNDEBUG -std=c++11 -fPIC
 LDFLAGS  =
 
 # OS specific
-# TODO: support Windows
 ifeq ($(UNAME_S),Linux)
 	CFLAGS   += -pthread
 	CXXFLAGS += -pthread
@@ -58,8 +40,6 @@ ifeq ($(UNAME_S),Haiku)
 endif
 
 # Architecture specific
-# TODO: probably these flags need to be tweaked on some architectures
-#       feel free to update the Makefile for your architecture and send a pull request or issue
 ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64 i686))
 	ifeq ($(UNAME_S),Darwin)
 		CFLAGS += -mf16c
@@ -167,7 +147,6 @@ endif
 
 $(info I llama.cpp build info: )
 $(info I UNAME_S:  $(UNAME_S))
-$(info I UNAME_P:  $(UNAME_P))
 $(info I UNAME_M:  $(UNAME_M))
 $(info I CFLAGS:   $(CFLAGS))
 $(info I CXXFLAGS: $(CXXFLAGS))
@@ -176,7 +155,7 @@ $(info I CC:       $(CCV))
 $(info I CXX:      $(CXXV))
 $(info )
 
-default: chat quantize
+default: run 
 
 #
 # Build library
@@ -189,26 +168,7 @@ utils.o: utils.cpp utils.h
 	$(CXX) $(CXXFLAGS) -c utils.cpp -o utils.o
 
 clean:
-	rm -f *.o main quantize
+	rm -f *.o run 
 
-chat: chat.cpp ggml.o utils.o
-	$(CXX) $(CXXFLAGS) chat.cpp ggml.o utils.o -o chat $(LDFLAGS)
-
-chat_mac: chat.cpp ggml.c utils.cpp
-	$(CC)  $(CFLAGS)   -c ggml.c -o ggml_x86.o -target x86_64-apple-macos
-	$(CC)  $(CFLAGS)   -c ggml.c -o ggml_arm.o -target arm64-apple-macos
-	
-	$(CXX) $(CXXFLAGS) chat.cpp ggml_x86.o utils.cpp -o chat_x86 $(LDFLAGS) -target x86_64-apple-macos
-	$(CXX) $(CXXFLAGS) chat.cpp ggml_arm.o utils.cpp -o chat_arm $(LDFLAGS) -target arm64-apple-macos
-	lipo -create -output chat_mac chat_x86 chat_arm
-
-quantize: quantize.cpp ggml.o utils.o
-	$(CXX) $(CXXFLAGS) quantize.cpp ggml.o utils.o -o quantize $(LDFLAGS)
-
-#
-# Tests
-#
-
-.PHONY: tests
-tests:
-	bash ./tests/run-tests.sh
+run: run.cpp ggml.o utils.o
+	$(CXX) $(CXXFLAGS) run.cpp ggml.o utils.o -o run $(LDFLAGS)

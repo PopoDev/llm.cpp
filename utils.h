@@ -73,7 +73,6 @@ std::map<std::string, int32_t> json_parse(const std::string & fname);
 //
 std::vector<gpt_vocab::id> gpt_tokenize(const gpt_vocab & vocab, const std::string & text);
 
-// TODO: this is probably wrong, but I cannot figure out how this tokenizer works ..
 // ref: https://github.com/google/sentencepiece
 std::vector<gpt_vocab::id> llama_tokenize(const gpt_vocab & vocab, const std::string & text, bool bos);
 
@@ -97,10 +96,3 @@ gpt_vocab::id llama_sample_top_p_top_k(
 
 // filer to top K tokens from list of logits
 void sample_top_k(std::vector<std::pair<double, gpt_vocab::id>> & logits_id, int top_k);
-
-//
-// Quantization
-//
-
-size_t ggml_quantize_q4_0(float * src, void * dst, int n, int k, int qk, int64_t * hist);
-size_t ggml_quantize_q4_1(float * src, void * dst, int n, int k, int qk, int64_t * hist);

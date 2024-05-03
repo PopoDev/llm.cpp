@@ -1,11 +1,6 @@
 #include "ggml.h"
 
-#if defined(_MSC_VER) || defined(__MINGW32__)
-#include <malloc.h> // using malloc.h with MSC/MINGW
-#elif !defined(__FreeBSD__) && !defined(__NetBSD__)
 #include <alloca.h>
-#endif
-
 #include <assert.h>
 #include <time.h>
 #include <math.h>
@@ -14,71 +9,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <float.h>
-
-// if C99 - static_assert is noop
-// ref: https://stackoverflow.com/a/53923785/4039976
-#ifndef static_assert
-#define static_assert(cond, msg) struct global_scope_noop_trick
-#endif
-
-#if defined _MSC_VER || defined(__MINGW32__)
-
-#if !defined(__MINGW32__)
-#include <Windows.h>
-#else
-// ref: https://github.com/ggerganov/whisper.cpp/issues/168
-#include <windows.h>
-#include <errno.h>
-#endif
-
-typedef volatile LONG atomic_int;
-typedef atomic_int atomic_bool;
-
-static void atomic_store(atomic_int* ptr, LONG val) {
-    InterlockedExchange(ptr, val);
-}
-static LONG atomic_load(atomic_int* ptr) {
-    return InterlockedCompareExchange(ptr, 0, 0);
-}
-static LONG atomic_fetch_add(atomic_int* ptr, LONG inc) {
-    return InterlockedExchangeAdd(ptr, inc);
-}
-static LONG atomic_fetch_sub(atomic_int* ptr, LONG dec) {
-    return atomic_fetch_add(ptr, -(dec));
-}
-
-typedef HANDLE pthread_t;
-
-typedef DWORD thread_ret_t;
-static int pthread_create(pthread_t* out, void* unused, thread_ret_t(*func)(void*), void* arg) {
-    HANDLE handle = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE) func, arg, 0, NULL);
-    if (handle == NULL)
-    {
-        return EAGAIN;
-    }
-
-    *out = handle;
-    return 0;
-}
-
-static int pthread_join(pthread_t thread, void* unused) {
-    return (int) WaitForSingleObject(thread, INFINITE);
-}
-
-static int sched_yield (void) {
-    Sleep (0);
-    return 0;
-}
-#else
 #include <pthread.h>
 #include <stdatomic.h>
 
 typedef void* thread_ret_t;
-#endif
-
-#ifdef __HAIKU__
-#define static_assert(cond, msg) _Static_assert(cond, msg)
-#endif
 
 /*#define GGML_PERF*/
 #define GGML_DEBUG 0
@@ -87,12 +21,6 @@ typedef void* thread_ret_t;
 
 #define GGML_SOFT_MAX_UNROLL 4
 #define GGML_VEC_DOT_UNROLL  2
-
-#ifdef GGML_USE_ACCELERATE
-// uncomment to use vDSP for soft max computation
-// note: not sure if it is actually faster
-//#define GGML_SOFT_MAX_ACCELERATE
-#endif
 
 #if UINTPTR_MAX == 0xFFFFFFFF
     #define GGML_MEM_ALIGN 4
@@ -285,24 +213,6 @@ ggml_fp16_t ggml_fp32_to_fp16(float x) {
 // timing
 //
 
-#if defined(_MSC_VER) || defined(__MINGW32__)
-static int64_t timer_freq;
-void ggml_time_init(void) {
-    LARGE_INTEGER frequency;
-    QueryPerformanceFrequency(&frequency);
-    timer_freq = frequency.QuadPart;
-}
-int64_t ggml_time_ms(void) {
-    LARGE_INTEGER t;
-    QueryPerformanceCounter(&t);
-    return (t.QuadPart * 1000) / timer_freq;
-}
-int64_t ggml_time_us(void) {
-    LARGE_INTEGER t;
-    QueryPerformanceCounter(&t);
-    return (t.QuadPart * 1000000) / timer_freq;
-}
-#else
 void ggml_time_init(void) {}
 int64_t ggml_time_ms(void) {
     struct timespec ts;
@@ -315,7 +225,6 @@ int64_t ggml_time_us(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec*1000000 + (int64_t)ts.tv_nsec/1000;
 }
-#endif
 
 int64_t ggml_cycles(void) {
     return clock();

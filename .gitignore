@@ -1,5 +1,8 @@
-# Binaries
+run
+
+# Models
 *.bin
+*.gguf
 
 # Prerequisites
 *.d

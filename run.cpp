@@ -522,7 +522,6 @@ bool llama_model_load(const std::string & fname, llama_model & model, gpt_vocab 
 //   - embd_inp:  the embeddings of the tokens in the context
 //   - embd_w:    the predicted logits for the next token
 //
-// The GPT-J model requires about 16MB of memory per input token.
 //
 bool llama_eval(
         const llama_model & model,
