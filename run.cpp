@@ -727,10 +727,12 @@ bool llama_eval(
     ggml_build_forward_expand(&gf, inpL);
     ggml_graph_compute       (ctx0, &gf);
 
-    //if (n_past%100 == 0) {
-    //    ggml_graph_print   (&gf);
-    //    ggml_graph_dump_dot(&gf, NULL, "gpt-2.dot");
-    //}
+#ifdef GGML_PERF
+    // print timing information per ggml operation (for debugging purposes)
+    // requires GGML_PERF to be defined
+    ggml_graph_print(&gf);
+#endif
+
 
     // return result for just the last token
     embd_w.resize(n_vocab);
@@ -751,6 +753,7 @@ static bool is_interacting = false;
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__)) || defined (_WIN32)
 void sigint_handler(int signo) {
     printf(ANSI_COLOR_RESET);
+    printf("\n== Quit ==\n");
     if (signo == SIGINT) {
         if (!is_interacting) {
             is_interacting=true;
@@ -834,9 +837,9 @@ int main(int argc, char ** argv) {
     // tokenize the prompt
     std::vector<gpt_vocab::id> embd_inp;
 
-    std::vector<gpt_vocab::id> instruct_inp = ::llama_tokenize(vocab, " Below is an instruction that describes a task. Write a response that appropriately completes the request.\n\n", true);
-    std::vector<gpt_vocab::id> prompt_inp = ::llama_tokenize(vocab, "### Instruction:\n\n", true);
-    std::vector<gpt_vocab::id> response_inp = ::llama_tokenize(vocab, "### Response:\n\n", false);
+    std::vector<gpt_vocab::id> instruct_inp = ::llama_tokenize(vocab, " Below is an instruction that describes a task. Write a response that appropriately completes the request.\n", true);
+    std::vector<gpt_vocab::id> prompt_inp = ::llama_tokenize(vocab, " Instruction:\n", true);
+    std::vector<gpt_vocab::id> response_inp = ::llama_tokenize(vocab, " Response:\n", false);
     embd_inp.insert(embd_inp.end(), instruct_inp.begin(), instruct_inp.end());
 
     if(!params.prompt.empty()) {
@@ -900,14 +903,7 @@ int main(int argc, char ** argv) {
     if (params.interactive_start) {
         is_interacting = true;
     }
-
-    // set the color for the prompt which will be output initially
-    if (params.use_color) {
-        printf(ANSI_COLOR_YELLOW);
-    }
-
     
-
     while (remaining_tokens > 0) {
         // predict
         if (embd.size() > 0) {
@@ -957,7 +953,7 @@ int main(int argc, char ** argv) {
         } else {
             // some user input remains from prompt or interaction, forward it to processing
             while (embd_inp.size() > input_consumed) {
-                // fprintf(stderr, "%6d -> '%s'\n", embd_inp[input_consumed], vocab.id_to_token.at(embd_inp[input_consumed]).c_str());
+                printf("%6d -> '%s'\n", embd_inp[input_consumed], vocab.id_to_token.at(embd_inp[input_consumed]).c_str());
 
                 embd.push_back(embd_inp[input_consumed]);
                 last_n_tokens.erase(last_n_tokens.begin());
@@ -991,6 +987,7 @@ int main(int argc, char ** argv) {
                 input_consumed = embd_inp.size();
                 embd_inp.insert(embd_inp.end(), prompt_inp.begin(), prompt_inp.end());
                 
+                printf(ANSI_COLOR_YELLOW);
                 printf("\n> ");
 
                 // currently being interactive
@@ -1048,16 +1045,13 @@ int main(int argc, char ** argv) {
 #endif
 
     // report timing
-    {
-        const int64_t t_main_end_us = ggml_time_us();
-
-        fprintf(stderr, "\n\n");
-        fprintf(stderr, "%s: mem per token = %8zu bytes\n", __func__, mem_per_token);
-        fprintf(stderr, "%s:     load time = %8.2f ms\n", __func__, t_load_us/1000.0f);
-        fprintf(stderr, "%s:   sample time = %8.2f ms\n", __func__, t_sample_us/1000.0f);
-        fprintf(stderr, "%s:  predict time = %8.2f ms / %.2f ms per token\n", __func__, t_predict_us/1000.0f, t_predict_us/1000.0f/n_past);
-        fprintf(stderr, "%s:    total time = %8.2f ms\n", __func__, (t_main_end_us - t_main_start_us)/1000.0f);
-    }
+    const int64_t t_main_end_us = ggml_time_us();
+    fprintf(stdout, "\n\n");
+    fprintf(stdout, "%s: mem per token = %8zu bytes\n", __func__, mem_per_token);
+    fprintf(stdout, "%s:     load time = %8.2f ms\n", __func__, t_load_us/1000.0f);
+    fprintf(stdout, "%s:   sample time = %8.2f ms\n", __func__, t_sample_us/1000.0f);
+    fprintf(stdout, "%s:  predict time = %8.2f ms / %.2f ms per token\n", __func__, t_predict_us/1000.0f, t_predict_us/1000.0f/n_past);
+    fprintf(stdout, "%s:    total time = %8.2f ms\n", __func__, (t_main_end_us - t_main_start_us)/1000.0f);
 
     ggml_free(model.ctx);
 

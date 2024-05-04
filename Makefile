@@ -17,6 +17,12 @@ CFLAGS   = -I. -O3 -DNDEBUG -std=c11   -fPIC
 CXXFLAGS = -I. -O3 -DNDEBUG -std=c++11 -fPIC
 LDFLAGS  =
 
+# Performance
+ifdef LLAMA_PERF
+	CFLAGS 	 += -DGGML_PERF
+	CXXFLAGS += -DGGML_PERF
+endif
+
 # OS specific
 ifeq ($(UNAME_S),Linux)
 	CFLAGS   += -pthread

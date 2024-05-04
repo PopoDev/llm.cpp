@@ -1,6 +1,11 @@
 #include "ggml.h"
 
+#if defined(_MSC_VER) || defined(__MINGW32__)
+#include <malloc.h> // using malloc.h with MSC/MINGW
+#elif !defined(__FreeBSD__) && !defined(__NetBSD__)
 #include <alloca.h>
+#endif
+
 #include <assert.h>
 #include <time.h>
 #include <math.h>
@@ -9,10 +14,71 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <float.h>
+
+// if C99 - static_assert is noop
+// ref: https://stackoverflow.com/a/53923785/4039976
+#ifndef static_assert
+#define static_assert(cond, msg) struct global_scope_noop_trick
+#endif
+
+#if defined _MSC_VER || defined(__MINGW32__)
+
+#if !defined(__MINGW32__)
+#include <Windows.h>
+#else
+// ref: https://github.com/ggerganov/whisper.cpp/issues/168
+#include <windows.h>
+#include <errno.h>
+#endif
+
+typedef volatile LONG atomic_int;
+typedef atomic_int atomic_bool;
+
+static void atomic_store(atomic_int* ptr, LONG val) {
+    InterlockedExchange(ptr, val);
+}
+static LONG atomic_load(atomic_int* ptr) {
+    return InterlockedCompareExchange(ptr, 0, 0);
+}
+static LONG atomic_fetch_add(atomic_int* ptr, LONG inc) {
+    return InterlockedExchangeAdd(ptr, inc);
+}
+static LONG atomic_fetch_sub(atomic_int* ptr, LONG dec) {
+    return atomic_fetch_add(ptr, -(dec));
+}
+
+typedef HANDLE pthread_t;
+
+typedef DWORD thread_ret_t;
+static int pthread_create(pthread_t* out, void* unused, thread_ret_t(*func)(void*), void* arg) {
+    HANDLE handle = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE) func, arg, 0, NULL);
+    if (handle == NULL)
+    {
+        return EAGAIN;
+    }
+
+    *out = handle;
+    return 0;
+}
+
+static int pthread_join(pthread_t thread, void* unused) {
+    return (int) WaitForSingleObject(thread, INFINITE);
+}
+
+static int sched_yield (void) {
+    Sleep (0);
+    return 0;
+}
+#else
 #include <pthread.h>
 #include <stdatomic.h>
 
 typedef void* thread_ret_t;
+#endif
+
+#ifdef __HAIKU__
+#define static_assert(cond, msg) _Static_assert(cond, msg)
+#endif
 
 /*#define GGML_PERF*/
 #define GGML_DEBUG 0
@@ -21,6 +87,12 @@ typedef void* thread_ret_t;
 
 #define GGML_SOFT_MAX_UNROLL 4
 #define GGML_VEC_DOT_UNROLL  2
+
+#ifdef GGML_USE_ACCELERATE
+// uncomment to use vDSP for soft max computation
+// note: not sure if it is actually faster
+//#define GGML_SOFT_MAX_ACCELERATE
+#endif
 
 #if UINTPTR_MAX == 0xFFFFFFFF
     #define GGML_MEM_ALIGN 4
@@ -213,6 +285,24 @@ ggml_fp16_t ggml_fp32_to_fp16(float x) {
 // timing
 //
 
+#if defined(_MSC_VER) || defined(__MINGW32__)
+static int64_t timer_freq;
+void ggml_time_init(void) {
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+    timer_freq = frequency.QuadPart;
+}
+int64_t ggml_time_ms(void) {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (t.QuadPart * 1000) / timer_freq;
+}
+int64_t ggml_time_us(void) {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (t.QuadPart * 1000000) / timer_freq;
+}
+#else
 void ggml_time_init(void) {}
 int64_t ggml_time_ms(void) {
     struct timespec ts;
@@ -225,6 +315,7 @@ int64_t ggml_time_us(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec*1000000 + (int64_t)ts.tv_nsec/1000;
 }
+#endif
 
 int64_t ggml_cycles(void) {
     return clock();
@@ -1854,6 +1945,13 @@ inline static float ggml_silu_f32(float x) {
     return x/(1.0 + exp(-x));
 }
 
+inline static void ggml_vec_silu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
+    const uint16_t * i16 = (const uint16_t *) x;
+    for (int i = 0; i < n; ++i) {
+        y[i] = table_silu_f16[i16[i]];
+    }
+}
+
 #ifdef GGML_SILU_FP16
 inline static void ggml_vec_silu_f32(const int n, float * y, const float * x) {
     uint16_t t;
@@ -2132,6 +2230,24 @@ inline static void ggml_critical_section_end(void) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+void ggml_print_object(const struct ggml_object * obj) {
+    GGML_PRINT(" - ggml_object: offset = %zu, size = %zu, next = %p\n",
+            obj->offs, obj->size, (const void *) obj->next);
+}
+
+void ggml_print_objects(const struct ggml_context * ctx) {
+    struct ggml_object * obj = ctx->objects_begin;
+
+    GGML_PRINT("%s: objects in context %p:\n", __func__, (const void *) ctx);
+
+    while (obj != NULL) {
+        ggml_print_object(obj);
+        obj = obj->next;
+    }
+
+    GGML_PRINT("%s: --- end ---\n", __func__);
+}
+
 int ggml_nelements(const struct ggml_tensor * tensor) {
     static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
 
@@ -2235,6 +2351,10 @@ static inline bool ggml_can_repeat(const struct ggml_tensor * t0, const struct g
 
 static inline int ggml_up32(int n) {
     return (n + 31) & ~31;
+}
+
+static inline int ggml_up64(int n) {
+    return (n + 63) & ~63;
 }
 
 static inline int ggml_up(int n, int m) {
@@ -2369,6 +2489,13 @@ size_t ggml_used_mem(const struct ggml_context * ctx) {
     return ctx->objects_end->offs + ctx->objects_end->size;
 }
 
+size_t ggml_set_scratch(struct ggml_context * ctx, struct ggml_scratch scratch) {
+    const size_t result = ctx->scratch.data ? ctx->scratch.offs : 0;
+
+    ctx->scratch = scratch;
+
+    return result;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -2524,6 +2651,17 @@ struct ggml_tensor * ggml_new_tensor_3d(
         int    ne2) {
     const int ne[3] = { ne0, ne1, ne2 };
     return ggml_new_tensor(ctx, type, 3, ne);
+}
+
+struct ggml_tensor * ggml_new_tensor_4d(
+        struct ggml_context * ctx,
+        enum   ggml_type type,
+        int    ne0,
+        int    ne1,
+        int    ne2,
+        int    ne3) {
+    const int ne[4] = { ne0, ne1, ne2, ne3 };
+    return ggml_new_tensor(ctx, type, 4, ne);
 }
 
 struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value) {
@@ -2725,6 +2863,48 @@ int32_t ggml_get_i32_1d(const struct ggml_tensor * tensor, int i) {
     return 0.0f;
 }
 
+void ggml_set_i32_1d(const struct ggml_tensor * tensor, int i, int32_t value) {
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_0:
+            {
+                GGML_ASSERT(false);
+            } break;
+        case GGML_TYPE_Q4_1:
+            {
+                GGML_ASSERT(false);
+            } break;
+        case GGML_TYPE_I8:
+            {
+                GGML_ASSERT(tensor->nb[0] == sizeof(int8_t));
+                ((int8_t *)(tensor->data))[i] = value;
+            } break;
+        case GGML_TYPE_I16:
+            {
+                GGML_ASSERT(tensor->nb[0] == sizeof(int16_t));
+                ((int16_t *)(tensor->data))[i] = value;
+            } break;
+        case GGML_TYPE_I32:
+            {
+                GGML_ASSERT(tensor->nb[0] == sizeof(int32_t));
+                ((int32_t *)(tensor->data))[i] = value;
+            } break;
+        case GGML_TYPE_F16:
+            {
+                GGML_ASSERT(tensor->nb[0] == sizeof(ggml_fp16_t));
+                ((ggml_fp16_t *)(tensor->data))[i] = GGML_FP32_TO_FP16(value);
+            } break;
+        case GGML_TYPE_F32:
+            {
+                GGML_ASSERT(tensor->nb[0] == sizeof(float));
+                ((float *)(tensor->data))[i] = value;
+            } break;
+        case GGML_TYPE_COUNT:
+            {
+                GGML_ASSERT(false);
+            } break;
+    }
+}
+
 float ggml_get_f32_1d(const struct ggml_tensor * tensor, int i) {
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
@@ -2815,6 +2995,11 @@ void * ggml_get_data(const struct ggml_tensor * tensor) {
     return tensor->data;
 }
 
+float * ggml_get_data_f32(const struct ggml_tensor * tensor) {
+    assert(tensor->type == GGML_TYPE_F32);
+    return (float *)(tensor->data);
+}
+
 struct ggml_tensor * ggml_view_tensor(
         struct ggml_context * ctx,
         const struct ggml_tensor * src) {
@@ -2843,6 +3028,18 @@ struct ggml_tensor * ggml_dup_impl(
     result->src1 = NULL;
 
     return result;
+}
+
+struct ggml_tensor * ggml_dup(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a) {
+    return ggml_dup_impl(ctx, a, false);
+}
+
+struct ggml_tensor * ggml_dup_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a) {
+    return ggml_dup_impl(ctx, a, true);
 }
 
 // ggml_add
@@ -3009,6 +3206,74 @@ struct ggml_tensor * ggml_div_inplace(
     return ggml_div_impl(ctx, a, b, true);
 }
 
+// ggml_sqr
+
+struct ggml_tensor * ggml_sqr_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a,
+        bool inplace) {
+    bool is_node = false;
+
+    if (!inplace && (a->grad)) {
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+
+    result->op   = GGML_OP_SQR;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src0 = a;
+    result->src1 = NULL;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_sqr(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_sqr_impl(ctx, a, false);
+}
+
+struct ggml_tensor * ggml_sqr_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_sqr_impl(ctx, a, true);
+}
+
+// ggml_sqrt
+
+struct ggml_tensor * ggml_sqrt_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a,
+        bool inplace) {
+    bool is_node = false;
+
+    if (!inplace && (a->grad)) {
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+
+    result->op   = GGML_OP_SQRT;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src0 = a;
+    result->src1 = NULL;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_sqrt(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_sqrt_impl(ctx, a, false);
+}
+
+struct ggml_tensor * ggml_sqrt_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_sqrt_impl(ctx, a, true);
+}
+
 // ggml_sum
 
 struct ggml_tensor * ggml_sum(
@@ -3023,6 +3288,29 @@ struct ggml_tensor * ggml_sum(
     struct ggml_tensor * result = ggml_new_tensor_1d(ctx, a->type, 1);
 
     result->op   = GGML_OP_SUM;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src0 = a;
+    result->src1 = NULL;
+
+    return result;
+}
+
+// ggml_mean
+
+struct ggml_tensor * ggml_mean(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a) {
+    bool is_node = false;
+
+    if (a->grad) {
+        GGML_ASSERT(false); // TODO: implement
+        is_node = true;
+    }
+
+    int ne[GGML_MAX_DIMS] = { 1, a->ne[1], a->ne[2], a->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, a->n_dims, ne);
+
+    result->op   = GGML_OP_MEAN;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src0 = a;
     result->src1 = NULL;
@@ -3125,6 +3413,40 @@ struct ggml_tensor * ggml_sgn_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_sgn_impl(ctx, a, true);
+}
+
+// ggml_neg
+
+struct ggml_tensor * ggml_neg_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a,
+        bool inplace) {
+    bool is_node = false;
+
+    if (!inplace && (a->grad)) {
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+
+    result->op   = GGML_OP_NEG;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src0 = a;
+    result->src1 = NULL;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_neg(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_neg_impl(ctx, a, false);
+}
+
+struct ggml_tensor * ggml_neg_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_neg_impl(ctx, a, true);
 }
 
 // ggml_step
@@ -9376,7 +9698,8 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
     GGML_PRINT_DEBUG("total work size = %zu bytes\n",cgraph->work_size);
 
     GGML_PRINT("n_nodes = %d\n", cgraph->n_nodes);
-    for (int i = 0; i < cgraph->n_nodes; i++) {
+    int print_n_nodes = MIN(cgraph->n_nodes, 10);
+    for (int i = 0; i < print_n_nodes; i++) {
         struct ggml_tensor * node = cgraph->nodes[i];
 
         perf_total_per_op_us[node->op] += node->perf_time_us;
@@ -9391,18 +9714,27 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
                 (double) node->perf_time_us / 1000.0 / node->perf_runs);
     }
 
-    GGML_PRINT("n_leafs = %d\n", cgraph->n_leafs);
-    for (int i = 0; i < cgraph->n_leafs; i++) {
-        struct ggml_tensor * node = cgraph->leafs[i];
+    if (cgraph->n_nodes > print_n_nodes) {
+        GGML_PRINT("%d nodes remaining...\n", cgraph->n_nodes - print_n_nodes);
+    }
 
-        GGML_PRINT(" - %3d: [ %6d, %6d] %8s\n",
-                i,
-                node->ne[0], node->ne[1],
-                GGML_OP_LABEL[node->op]);
+    GGML_PRINT("n_leafs = %d\n", cgraph->n_leafs);
+    // for (int i = 0; i < cgraph->n_leafs; i++) {
+    //     struct ggml_tensor * node = cgraph->leafs[i];
+
+    //     GGML_PRINT(" - %3d: [ %6d, %6d] %8s\n",
+    //             i,
+    //             node->ne[0], node->ne[1],
+    //             GGML_OP_LABEL[node->op]);
+    // }
+
+    int64_t perf_total_us = 0;
+    for (int i = 0; i < GGML_OP_COUNT; i++) {
+        perf_total_us += perf_total_per_op_us[i];
     }
 
     for (int i = 0; i < GGML_OP_COUNT; i++) {
-        GGML_PRINT("perf_total_per_op_us[%16s] = %7.3f ms\n", GGML_OP_LABEL[i], (double) perf_total_per_op_us[i] / 1000.0);
+        GGML_PRINT("perf_total_per_op_us[%16s] = %8.3f ms | %.2f%% \n", GGML_OP_LABEL[i], (double) perf_total_per_op_us[i] / 1000.0, (double) perf_total_per_op_us[i] / (double) perf_total_us * 100.0);
     }
 
     GGML_PRINT("========================================\n");
