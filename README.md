@@ -1,10 +1,10 @@
 # llm.cpp
 
 Run a ChatGPT-like model using CPU and GPU. The goal of this project is to optimize the performance of LLM generation on consumer hardware. We plan to implement the following features:
-- GPU acceleration
-- CPU/GPU hybrid computation
-- Parallel computation
-- Quantization
+- [X] CPU inference
+- [X] Multi-threading
+- [ ] GPU acceleration
+- [ ] CPU/GPU hybrid computation
 
 ```bash
 == Running in chat mode. ==
