@@ -19,6 +19,7 @@
 #include <Windows.h>
 #endif
 
+// colors
 #define ANSI_COLOR_RED     "\x1b[31m"
 #define ANSI_COLOR_GREEN   "\x1b[32m"
 #define ANSI_COLOR_YELLOW  "\x1b[33m"
@@ -27,6 +28,15 @@
 #define ANSI_COLOR_CYAN    "\x1b[36m"
 #define ANSI_COLOR_RESET   "\x1b[0m"
 #define ANSI_BOLD          "\x1b[1m"
+
+// logging
+#if (GGML_DEBUG >= 1)
+#define GGML_PRINT_DEBUG(...) printf(__VA_ARGS__)
+#else
+#define GGML_PRINT_DEBUG(...)
+#endif
+
+#define GGML_PRINT(...) printf(__VA_ARGS__)
 
 // determine number of model parts based on the dimension
 static const std::map<int, int> LLAMA_N_PARTS = {
@@ -953,7 +963,7 @@ int main(int argc, char ** argv) {
         } else {
             // some user input remains from prompt or interaction, forward it to processing
             while (embd_inp.size() > input_consumed) {
-                printf("%6d -> '%s'\n", embd_inp[input_consumed], vocab.id_to_token.at(embd_inp[input_consumed]).c_str());
+                GGML_PRINT_DEBUG("%6d -> '%s'\n", embd_inp[input_consumed], vocab.id_to_token.at(embd_inp[input_consumed]).c_str());
 
                 embd.push_back(embd_inp[input_consumed]);
                 last_n_tokens.erase(last_n_tokens.begin());
@@ -986,7 +996,13 @@ int main(int argc, char ** argv) {
             if (is_interacting) {
                 input_consumed = embd_inp.size();
                 embd_inp.insert(embd_inp.end(), prompt_inp.begin(), prompt_inp.end());
-                
+
+                // report timing
+                GGML_PRINT("\n\n== Timing ==\n");
+                GGML_PRINT("mem per token = %8zu bytes\n", mem_per_token);
+                GGML_PRINT("sample time   = %8.2f ms\n", __func__, t_sample_us/1000.0f);
+                GGML_PRINT("predict time  = %8.2f ms | %.2f ms per token\n", t_predict_us/1000.0f, t_predict_us/1000.0f/n_past);
+
                 printf(ANSI_COLOR_YELLOW);
                 printf("\n> ");
 
@@ -1044,14 +1060,7 @@ int main(int argc, char ** argv) {
     signal(SIGINT, SIG_DFL);
 #endif
 
-    // report timing
-    const int64_t t_main_end_us = ggml_time_us();
-    fprintf(stdout, "\n\n");
-    fprintf(stdout, "%s: mem per token = %8zu bytes\n", __func__, mem_per_token);
-    fprintf(stdout, "%s:     load time = %8.2f ms\n", __func__, t_load_us/1000.0f);
-    fprintf(stdout, "%s:   sample time = %8.2f ms\n", __func__, t_sample_us/1000.0f);
-    fprintf(stdout, "%s:  predict time = %8.2f ms / %.2f ms per token\n", __func__, t_predict_us/1000.0f, t_predict_us/1000.0f/n_past);
-    fprintf(stdout, "%s:    total time = %8.2f ms\n", __func__, (t_main_end_us - t_main_start_us)/1000.0f);
+
 
     ggml_free(model.ctx);
 
