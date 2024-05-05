@@ -13,14 +13,19 @@ CXXV := $(shell $(CXX) --version | head -n 1)
 # Compile flags
 #
 
-CFLAGS   = -I. -O3 -DNDEBUG -std=c11   -fPIC
-CXXFLAGS = -I. -O3 -DNDEBUG -std=c++11 -fPIC
+CFLAGS   = -I. -O3 -std=c11   -fPIC
+CXXFLAGS = -I. -O3 -std=c++11 -fPIC
 LDFLAGS  =
 
 # Performance
-ifdef LLAMA_PERF
+ifdef PERF
 	CFLAGS 	 += -DGGML_PERF
 	CXXFLAGS += -DGGML_PERF
+endif
+
+# Debug
+ifdef DEBUG
+	CXXFLAGS += -DGGML_DEBUG
 endif
 
 # OS specific
