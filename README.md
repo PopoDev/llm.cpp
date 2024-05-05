@@ -6,7 +6,7 @@ Run a ChatGPT-like model using CPU and GPU. The goal of this project is to optim
 - [ ] GPU acceleration
 - [ ] CPU/GPU hybrid computation
 
-```bash
+```
 == Running in chat mode. ==
  - Press Ctrl+C to interject at any time.
  - Press Return to return control to LLaMA.
@@ -48,10 +48,10 @@ make run
 
 ## Performance Analysis
 
-Use the flag `LLAMA_PERF` to enable the performance analysis.
+Use the flag `PERF` to enable the performance analysis.
 
 ```bash
-LLAMA_PERF=1 make run
+PERF=1 make run
 ```
 
 The output will be like this:
