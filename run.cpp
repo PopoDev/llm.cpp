@@ -1000,7 +1000,7 @@ int main(int argc, char ** argv) {
                 // report timing
                 GGML_PRINT("\n\n== Timing ==\n");
                 GGML_PRINT("mem per token = %8zu bytes\n", mem_per_token);
-                GGML_PRINT("sample time   = %8.2f ms\n", __func__, t_sample_us/1000.0f);
+                GGML_PRINT("sample time   = %8.2f ms\n", t_sample_us/1000.0f);
                 GGML_PRINT("predict time  = %8.2f ms | %.2f ms per token\n", t_predict_us/1000.0f, t_predict_us/1000.0f/n_past);
 
                 printf(ANSI_COLOR_YELLOW);
