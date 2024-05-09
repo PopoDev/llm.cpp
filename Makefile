@@ -17,6 +17,12 @@ CFLAGS   = -I. -O3 -std=c11   -fPIC
 CXXFLAGS = -I. -O3 -std=c++11 -fPIC
 LDFLAGS  =
 
+# CUDA
+ifdef CUDA
+	CFLAGS   += -DGGML_CUDA
+	CXXFLAGS += -DGGML_CUDA
+endif
+
 # Performance
 ifdef PERF
 	CFLAGS 	 += -DGGML_PERF

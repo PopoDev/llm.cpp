@@ -1,6 +1,10 @@
 #include "ggml.h"
-
 #include "utils.h"
+
+// backend
+#ifdef GGML_CUDA
+#include "ggml_cuda.h"
+#endif
 
 #include <cassert>
 #include <cmath>
@@ -90,8 +94,7 @@ struct llama_model {
     // key + value memory
     struct ggml_tensor * memory_k;
     struct ggml_tensor * memory_v;
-
-    //
+ 
     struct ggml_context * ctx;
     std::map<std::string, struct ggml_tensor *> tensors;
 };
