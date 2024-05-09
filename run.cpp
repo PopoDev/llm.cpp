@@ -3,7 +3,7 @@
 
 // backend
 #ifdef GGML_CUDA
-#include "ggml_cuda.h"
+#include "ggml-cuda.h"
 #endif
 
 #include <cassert>

@@ -19,8 +19,10 @@ LDFLAGS  =
 
 # CUDA
 ifdef CUDA
+	CUDA_OBJECTS = ggml-cuda.o
 	CFLAGS   += -DGGML_CUDA
 	CXXFLAGS += -DGGML_CUDA
+	LDFLAGS += -L/usr/local/cuda/lib64 -lcudart -lcublas
 endif
 
 # Performance
@@ -162,7 +164,7 @@ endif
 # Print build information
 #
 
-$(info I llama.cpp build info: )
+$(info I llm.cpp build info: )
 $(info I UNAME_S:  $(UNAME_S))
 $(info I UNAME_M:  $(UNAME_M))
 $(info I CFLAGS:   $(CFLAGS))
@@ -178,6 +180,11 @@ default: run
 # Build library
 #
 
+ggml-cuda.o: ggml-cuda.cu ggml-cuda.h
+ifdef CUDA
+	nvcc -c ggml-cuda.cu -o ggml-cuda.o
+endif
+
 ggml.o: ggml.c ggml.h
 	$(CC)  $(CFLAGS)   -c ggml.c -o ggml.o
 
@@ -187,5 +194,5 @@ utils.o: utils.cpp utils.h
 clean:
 	rm -f *.o run 
 
-run: run.cpp ggml.o utils.o
-	$(CXX) $(CXXFLAGS) run.cpp ggml.o utils.o -o run $(LDFLAGS)
+run: run.cpp $(CUDA_OBJECTS) ggml.o utils.o
+	$(CXX) $(CXXFLAGS) run.cpp $(CUDA_OBJECTS) ggml.o utils.o -o run $(LDFLAGS)
