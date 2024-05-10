@@ -45,6 +45,13 @@ make run
 ./run
 ```
 
+### CUDA
+```bash
+export PATH=/usr/local/cuda/bin:$PATH
+CUDA=1 make run
+./run
+```
+
 
 ## Performance Analysis
 

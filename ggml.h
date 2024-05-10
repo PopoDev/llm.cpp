@@ -169,19 +169,30 @@
 //
 //
 
-#ifdef  __cplusplus
-extern "C" {
-#endif
 
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 
-#define GGML_MAX_DIMS     4
-#define GGML_MAX_NODES    4096
-#define GGML_MAX_PARAMS   16
-#define GGML_MAX_CONTEXTS 64
-#define GGML_MAX_OPT      4
+#define GGML_MAX_DIMS          4
+#define GGML_MAX_NODES         4096
+#define GGML_MAX_PARAMS        256
+#define GGML_MAX_CONTEXTS      64
+#define GGML_MAX_OPT           4
+#define GGML_MAX_NAME          64
+#define GGML_DEFAULT_N_THREADS 4
+
+#define GGML_ASSERT(x) \
+    do { \
+        if (!(x)) { \
+            fprintf(stderr, "GGML_ASSERT: %s:%d: %s\n", __FILE__, __LINE__, #x); \
+            abort(); \
+        } \
+    } while (0)
+
+#ifdef  __cplusplus
+extern "C" {
+#endif
 
 #ifdef __ARM_NEON
 // we use the built-in 16-bit float type
@@ -206,6 +217,12 @@ enum ggml_type {
     GGML_TYPE_F16,
     GGML_TYPE_F32,
     GGML_TYPE_COUNT,
+};
+
+enum ggml_backend {
+    GGML_BACKEND_CPU = 0,
+    GGML_BACKEND_GPU = 10,
+    GGML_BACKEND_GPU_SPLIT = 20,
 };
 
 // available tensor operations:
@@ -253,9 +270,46 @@ enum ggml_op {
     GGML_OP_COUNT,
 };
 
+typedef struct
+{
+    // keep it divisible by 16 bytes
+    int8_t layer_id;                  // -1 = global, 0 = first layer
+    char short_name[GGML_MAX_NAME];   // shorter parameter weight name without layer name - used for debugging visualization only
+
+    int8_t cuda_op_directive;       // -1 = default, 0 = no CUDA operation permitted, 1 = CUDA operation enforced (if possible) - allows to skip or force CUDA (needs more implementations)
+
+    int8_t cuda_info_op_on_device;         // -2 = not computed, -1 = on CPU, 0+ = on GPU device # not implemented yet
+    uint8_t cuda_perf_mal_mul_type;   // perf flag for dst tensors: 0 = no matmul, 1 = quantized kernel, 16/32 cuBLAS 16 or 32 bit processing
+
+    // custom parameters for quick ggml function alteration (for example: rope)
+    float f_custom[4];  
+    int i_custom[4];
+
+    uint8_t debug_flag;
+
+    char padding[15];
+} tensor_meta;
+static const tensor_meta GGML_DEFAULT_TENSOR_META = {
+    /*.layer_id =*/ -1,
+    /*.short_name =*/ "",
+
+    /*.cuda_op_directive =*/ -1,
+
+    /*.cuda_info_op_on_device =*/ -2,
+    /*.cuda_perf_mal_mul_type =*/ 0,
+    /*.f_custom =*/ {0.0f, 0.0f, 0.0f, 0.0f},
+    /*.i_custom =*/ {0, 0, 0, 0},
+
+    /*.debug_flag =*/ 0,
+
+
+    /*.padding =*/ {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+};
+
 // n-dimensional tensor
 struct ggml_tensor {
-    enum ggml_type type;
+    enum ggml_type    type;
+    //enum ggml_backend backend;
 
     int    n_dims;
     int    ne[GGML_MAX_DIMS]; // number of elements
@@ -283,7 +337,13 @@ struct ggml_tensor {
     int64_t perf_time_us;
 
     void * data;
-    char padding[8];
+
+    // char name[GGML_MAX_NAME];
+
+    // void * extra; // extra things (populated in ggml-cuda.cu, so it's cuBLAS only)
+    // tensor_meta meta; // structured generic meta data - increase in chunks of 16 bytes only
+
+    char padding[4];
 };
 
 // computation graph
@@ -318,6 +378,27 @@ struct ggml_init_params {
     void * mem_buffer; // if NULL, memory will be allocated internally
 };
 
+// compute types
+
+    // NOTE: the INIT or FINALIZE pass is not scheduled unless explicitly enabled.
+    // This behavior was changed since https://github.com/ggerganov/llama.cpp/pull/1995.
+    enum ggml_task_type {
+        GGML_TASK_INIT = 0,
+        GGML_TASK_COMPUTE,
+        GGML_TASK_FINALIZE,
+    };
+
+    struct ggml_compute_params {
+        enum ggml_task_type type;
+
+        // ith = thread index, nth = number of threads
+        int ith, nth;
+
+        // work buffer for all threads
+        size_t wsize;
+        void * wdata;
+    };
+
 void    ggml_time_init(void); // call this once at the beginning of the program
 int64_t ggml_time_ms(void);
 int64_t ggml_time_us(void);
@@ -327,14 +408,21 @@ int64_t ggml_cycles_per_ms(void);
 void ggml_print_object (const struct ggml_object * obj);
 void ggml_print_objects(const struct ggml_context * ctx);
 
-int    ggml_nelements(const struct ggml_tensor * tensor);
-size_t ggml_nbytes   (const struct ggml_tensor * tensor);
+int64_t ggml_nelements(const struct ggml_tensor * tensor);
+int64_t ggml_nrows   (const struct ggml_tensor * tensor);
+size_t  ggml_nbytes   (const struct ggml_tensor * tensor);
+size_t  ggml_nbytes_split(const struct ggml_tensor * tensor, int nrows_split);
 
 int    ggml_blck_size (enum ggml_type type);
 size_t ggml_type_size (enum ggml_type type); // size in bytes for all elements in a block
 float  ggml_type_sizef(enum ggml_type type); // ggml_type_size()/ggml_blck_size() as float
 
 size_t ggml_element_size(const struct ggml_tensor * tensor);
+
+bool ggml_is_quantized(enum ggml_type type);
+bool ggml_is_transposed(const struct ggml_tensor * tensor);
+bool ggml_is_contiguous(const struct ggml_tensor * tensor);
+bool ggml_is_permuted  (const struct ggml_tensor * tensor);
 
 struct ggml_context * ggml_init(struct ggml_init_params params);
 void ggml_free(struct ggml_context * ctx);
@@ -757,6 +845,15 @@ int ggml_cpu_has_wasm_simd(void);
 int ggml_cpu_has_blas(void);
 int ggml_cpu_has_sse3(void);
 int ggml_cpu_has_vsx(void);
+
+//
+// custom optional parameters in meta struct
+//
+// -- ROPE --
+#define GGML_CUSTOM_F_ROPE_ANG_SCALE 0 // theta pre scale (basically scales n_past linearly)
+#define GGML_CUSTOM_F_ROPE_NTK_ALPHA 1 // 4/8; theta base freq alpha scale (NTK fourier space) - best in combination with DYNAMIC_MODE = 1
+#define GGML_CUSTOM_I_ROPE_ANG_FREQ 0 // base freq (GPT default is 10000)
+#define GGML_CUSTOM_I_ROPE_DYNAMIC_MODE 1 // 1 = dynamic scaling based on given n_ctx and optional NTK_ALPHA using the research of u/emozilla and u/bloc97 of adaptive fourier space scaling of the rotation
 
 #ifdef  __cplusplus
 }

@@ -195,4 +195,8 @@ clean:
 	rm -f *.o run 
 
 run: run.cpp $(CUDA_OBJECTS) ggml.o utils.o
+ifdef CUDA
+	nvcc -DGGML_CUDA run.cpp $(CUDA_OBJECTS) ggml.o utils.o -o run $(LDFLAGS)
+else
 	$(CXX) $(CXXFLAGS) run.cpp $(CUDA_OBJECTS) ggml.o utils.o -o run $(LDFLAGS)
+endif

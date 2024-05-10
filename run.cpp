@@ -42,6 +42,12 @@
 
 #define GGML_PRINT(...) printf(__VA_ARGS__)
 
+typedef void (*offload_func_t)(struct ggml_tensor * tensor);
+
+void llama_nop(struct ggml_tensor * tensor) { // don't offload by default
+    (void) tensor;
+}
+
 // determine number of model parts based on the dimension
 static const std::map<int, int> LLAMA_N_PARTS = {
     { 4096, 1 },
@@ -90,6 +96,7 @@ struct llama_model {
     struct ggml_tensor * output;
 
     std::vector<llama_layer> layers;
+    int n_gpu_layers;
 
     // key + value memory
     struct ggml_tensor * memory_k;
@@ -553,6 +560,7 @@ bool llama_eval(
     const int n_head  = hparams.n_head;
     const int n_vocab = hparams.n_vocab;
     const int n_rot   = hparams.n_embd/hparams.n_head;
+    const int n_gpu_layers = 2; // model.n_gpu_layers;
 
     const int d_key = n_embd/n_head;
 
@@ -588,6 +596,18 @@ bool llama_eval(
 
     struct ggml_tensor * inpL = ggml_get_rows(ctx0, model.tok_embeddings, embd);
 
+    offload_func_t offload_func_kq = llama_nop;
+    offload_func_t offload_func_v  = llama_nop;
+
+#ifdef GGML_CUDA
+    if (n_gpu_layers > n_layer + 1) {
+        offload_func_v  = ggml_cuda_assign_buffers;
+    }
+    if (n_gpu_layers > n_layer + 2) {
+        offload_func_kq = ggml_cuda_assign_buffers;
+    }
+#endif // GGML_CUDA
+
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
@@ -606,8 +626,11 @@ bool llama_eval(
         // self-attention
         {
             struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
+            offload_func_kq(Qcur);
             struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, model.layers[il].wk, cur);
+            offload_func_kq(Kcur);
             struct ggml_tensor * Vcur = ggml_mul_mat(ctx0, model.layers[il].wv, cur);
+            offload_func_v(Vcur);
 
             // store key and value to memory
             if (N >= 1) {
